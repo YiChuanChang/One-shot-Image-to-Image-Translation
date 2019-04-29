@@ -19,7 +19,7 @@ def parse_args():
 	parser.add_argument('--sample_dir', type=str, default='samples',
 		help='Directory name to save the samples on training')
 
-	parser.add_argument('--dataset', type=str, default='monet2photo', help='dataset_name')
+	parser.add_argument('--dataset', type=str, default='maps', help='dataset_name')
 	parser.add_argument('--augment_flag', type=bool, default=True, help='Image augmentation use or not')
 	parser.add_argument('--epoch', type=int, default=20, help='The number of epochs to run')
 	parser.add_argument('--iteration', type=int, default=10000, help='The number of training iterations')
@@ -33,10 +33,11 @@ def parse_args():
 	parser.add_argument('--img_c', type=int, default=3, help='The size of image channel')
 
 	parser.add_argument('--gan_w', type=float, default=1.0, help='weight of adversarial loss')
-	parser.add_argument('--con_w', type=float, default=10.0, help='weight of content reconstruction loss')
-	parser.add_argument('--sty_w', type=float, default=1.0, help='weight of style reconstruction loss')
-	parser.add_argument('--cyc_w', type=float, default=1.0, help='weight of cycle consistency loss')
-	parser.add_argument('--rec_w', type=float, default=1.0, help='weight of image reconstruction loss')
+	parser.add_argument('--con_w', type=float, default=0.0, help='weight of content reconstruction loss')
+	parser.add_argument('--sty_w', type=float, default=0.0, help='weight of style reconstruction loss')
+	parser.add_argument('--cyc_w', type=float, default=0.0, help='weight of cycle consistency loss')
+	parser.add_argument('--rec_w', type=float, default=0.0, help='weight of image reconstruction loss')
+	parser.add_argument('--per_w', type=float, default=10.0, help='weight of perceptual loss')
 
 	parser.add_argument('--ch', type=int, default=64, help='base channel number per layer')
 	
@@ -47,7 +48,7 @@ def parse_args():
 	parser.add_argument('--n_style_downsample', type=int, default=2, help='number of residual blocks in style encoder')
 
 	parser.add_argument('--n_upsample', type=int, default=2, help='number of residual blocks in decoder')
-	parser.add_argument('--useUNet', type=bool, default=False, help='use UNet or not')
+	parser.add_argument('--useUNet', type=bool, default=True, help='use UNet or not')
 	 
 	parser.add_argument('--n_scale', type=int, default=3, help='number of scales of discriminator')
 	parser.add_argument('--n_dis', type=int, default=4, help='number of discriminator layer')

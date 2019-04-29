@@ -4,6 +4,7 @@ from utils import *
 from ops import *
 from glob import glob
 from tensorflow.contrib.data import batch_and_drop_remainder
+from custom_vgg16 import *
 
 
 class ZSIT(object):
@@ -43,6 +44,7 @@ class ZSIT(object):
 		self.sty_w = args.sty_w # for loss: L1(origin_style, reconstruct_style)
 		self.cyc_w = args.cyc_w # for loss: cycle reconstruct
 		self.rec_w = args.rec_w # for loss: reconstruct original image
+		self.per_w = args.per_w # for loss: perceptual loss
 
 		self.ch = args.ch
 
@@ -227,8 +229,8 @@ class ZSIT(object):
 		style_B_re, content_A_re, content_A_re_layers = self.Encoder(sty_B_con_A, reuse=True)
 
 		# decode again for cycle loss
-		cycle_A = self.Decoder(style_A, content_A_re, content_A_re_layers, reuse=True)
-		cycle_B = self.Decoder(style_B, content_B_re, content_B_re_layers, reuse=True)
+		# cycle_A = self.Decoder(style_A, content_A_re, content_A_re_layers, reuse=True)
+		# cycle_B = self.Decoder(style_B, content_B_re, content_B_re_layers, reuse=True)
 
 		real_A_logit, real_B_logit = self.Discriminator_real(self.domain_A, self.domain_B)
 		fake_A_logit, fake_B_logit = self.Discriminator_fake(sty_A_con_B, sty_B_con_A)
@@ -236,6 +238,7 @@ class ZSIT(object):
 		# define loss
 		G_loss_A = generator_loss(fake_A_logit)
 		G_loss_B = generator_loss(fake_B_logit)
+		self.GAN_loss = G_loss_A + G_loss_B
 
 		recon_loss_A = L1_loss(sty_A_con_A, self.domain_A) # reconstruction
 		recon_loss_B = L1_loss(sty_B_con_B, self.domain_B) # reconstruction
@@ -246,8 +249,19 @@ class ZSIT(object):
 		recon_content_loss_A = L1_loss(content_A_re, content_A)
 		recon_content_loss_B = L1_loss(content_B_re, content_B)
 
-		cycle_A_loss = L1_loss(cycle_A, self.domain_A)
-		cycle_B_loss = L1_loss(cycle_B, self.domain_B)
+		# perceptual loss
+		vgg16_weight = loadWeightsData('./vgg16.npy')
+		perceptual_style_loss_A = perceptual_loss_style(sty_A_con_A, sty_A_con_B, vgg16_weight, batchsize=1)
+		perceptual_style_loss_B = perceptual_loss_style(sty_B_con_A, sty_B_con_B, vgg16_weight, batchsize=1)
+		perceptual_content_loss_A = perceptual_loss_content(sty_A_con_A, sty_B_con_A, vgg16_weight, batchsize=1)
+		perceptual_content_loss_B = perceptual_loss_content(sty_A_con_B, sty_B_con_B, vgg16_weight, batchsize=1)
+		perceptual_style = perceptual_style_loss_A + perceptual_style_loss_B
+		perceptual_content = perceptual_content_loss_A + perceptual_content_loss_B
+		self.perceptual_loss = 10.0*perceptual_style + perceptual_content
+
+
+		# cycle_A_loss = L1_loss(cycle_A, self.domain_A)
+		# cycle_B_loss = L1_loss(cycle_B, self.domain_B)
 
 		D_loss_A = discriminator_loss(real_A_logit, fake_A_logit)
 		D_loss_B = discriminator_loss(real_B_logit, fake_B_logit)
@@ -259,7 +273,8 @@ class ZSIT(object):
 						self.rec_w * (recon_loss_A + recon_loss_B) + \
 						self.sty_w * (recon_style_loss_A + recon_style_loss_B) + \
 						self.con_w * (recon_content_loss_A + recon_content_loss_B) + \
-						self.cyc_w * (cycle_A_loss + cycle_B_loss)
+						self.per_w * self.perceptual_loss
+						# + self.cyc_w * (cycle_A_loss + cycle_B_loss)
 
 		self.Discriminator_loss = D_loss_A + D_loss_B
 
@@ -287,8 +302,11 @@ class ZSIT(object):
 		self.content_loss = tf.summary.scalar("Content_loss", self.content_encoder_loss)
 		self.D_A_loss = tf.summary.scalar("D_A_loss", D_loss_A)
 		self.D_B_loss = tf.summary.scalar("D_B_loss", D_loss_B)
+		self.perceptual_style = tf.summary.scalar("perceptual_style", perceptual_style)
+		self.perceptual_content = tf.summary.scalar("perceptual_content", perceptual_content)
+		self.P_loss = tf.summary.scalar("perceptual_loss", self.perceptual_loss)
 
-		self.G_loss = tf.summary.merge([self.all_G_loss, self.style_loss, self.content_loss])
+		self.G_loss = tf.summary.merge([self.all_G_loss, self.style_loss, self.content_loss, self.perceptual_style, self.perceptual_content, self.P_loss])
 		self.D_loss = tf.summary.merge([self.all_D_loss, self.D_A_loss, self.D_B_loss])
 
 		''' Images '''
@@ -299,8 +317,8 @@ class ZSIT(object):
 		self.real_B = self.domain_B
 		self.reco_A = sty_A_con_A
 		self.reco_B = sty_B_con_B
-		self.cycl_A = cycle_A
-		self.cycl_B = cycle_B
+		# self.cycl_A = cycle_A
+		# self.cycl_B = cycle_B
 
 		''' Test '''
 		self.test_A = tf.placeholder(tf.float32, [1, self.img_h, self.img_w, self.img_c], name='test_A')
@@ -317,8 +335,8 @@ class ZSIT(object):
 		self.test_recon_A = self.Decoder(test_style_A, test_content_A, test_content_A_re_layers, reuse=True)
 		self.test_recon_B = self.Decoder(test_style_B, test_content_B, test_content_B_re_layers, reuse=True)
 
-		self.test_cycle_A = self.Decoder(test_style_A, test_content_A_re, test_content_A_re_layers, reuse=True)
-		self.test_cycle_B = self.Decoder(test_style_B, test_content_B_re, test_content_B_re_layers, reuse=True)
+		# self.test_cycle_A = self.Decoder(test_style_A, test_content_A_re, test_content_A_re_layers, reuse=True)
+		# self.test_cycle_B = self.Decoder(test_style_B, test_content_B_re, test_content_B_re_layers, reuse=True)
 		
 	##################################################################################
 	# Operations
@@ -354,7 +372,7 @@ class ZSIT(object):
 		index = open(index_path, 'a')
 		index.write("<html><body><table><tr>")
 		index.write("<th>image_A</th> <th>image_B</th><th>styA_conB</th><th>styB_conA</th>\
-			<th>recon_A</th><th>recon_B</th><th>cycle_A</th><th>cycle_B</th></tr>")
+			<th>recon_A</th><th>recon_B</th></tr>")
 		index.close
 		for epoch in range(start_epoch, self.epoch+1):
 			lr = self.init_lr * pow(0.5, epoch)
@@ -363,18 +381,18 @@ class ZSIT(object):
 			for idx in range(start_batch_id, self.iteration):
 
 				# Update G
-				batch_A_images, batch_B_images, fake_A, fake_B, reco_A, reco_B, cycl_A, cycle_B, _, g_loss, summary_str\
+				batch_A_images, batch_B_images, fake_A, fake_B, reco_A, reco_B, _, g_loss, per_loss, gan_loss, summary_str\
 					= self.sess.run([
 						self.real_A, 
 						self.real_B, 
 						self.fake_A, 
 						self.fake_B,
 						self.reco_A, 
-						self.reco_B, 
-						self.cycl_A, 
-						self.cycl_B, 
+						self.reco_B,
 						self.G_optim, 
 						self.Generator_loss, 
+						self.perceptual_loss,
+						self.GAN_loss,
 						self.G_loss], feed_dict={self.lr:lr})
 				self.writer.add_summary(summary_str, counter)
 
@@ -389,8 +407,8 @@ class ZSIT(object):
 
 				counter += 1
 				# log out training status now
-				print('Epoch: [%2d] [%6d/%6d] time: %4.4f d_loss: %.6f, g_loss: %.6f'\
-					%(epoch, idx, self.iteration, time.time()-start_time, d_loss, g_loss))
+				print('Epoch: [%2d] [%6d/%6d] time: %4.4f d_loss: %.6f, g_loss: %.6f, per_loss:%.6f, gan_loss:%.6f'\
+					%(epoch, idx, self.iteration, time.time()-start_time, d_loss, g_loss, per_loss, gan_loss))
 
 				if(np.mod(idx+1, self.print_freq)==0):
 
@@ -408,10 +426,6 @@ class ZSIT(object):
 						'./{}/reco_A_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
 					save_images(reco_B, self.batch_size,\
 						'./{}/reco_B_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
-					save_images(cycl_A, self.batch_size,\
-						'./{}/cycl_A_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
-					save_images(cycle_B, self.batch_size,\
-						'./{}/cycl_B_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
 
 					index.write("<tr>")
 					index.write("<td><img src=real_A_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format(epoch, idx+1 , 150, 150))
@@ -421,8 +435,6 @@ class ZSIT(object):
 					index.write("<td><img src=fake_B_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
 					index.write("<td><img src=reco_A_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
 					index.write("<td><img src=reco_B_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
-					index.write("<td><img src=cycl_A_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
-					index.write("<td><img src=cycl_B_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
 					index.write("</tr>")
 					index.close()
 
@@ -450,7 +462,7 @@ class ZSIT(object):
 		index = open(index_path, 'w')
 		index.write("<html><body><table><tr>")
 		index.write("<th>image_A</th> <th>image_B</th><th>styA_conB</th><th>styB_conA</th>\
-			<th>recon_A</th><th>recon_B</th><th>cycle_A</th><th>cycle_B</th></tr>")
+			<th>recon_A</th><th>recon_B</th></tr>")
 
 		list_len = min(len(test_A_files), len(test_B_files))
 		for idx in range(list_len):
@@ -459,8 +471,8 @@ class ZSIT(object):
 			base_path = os.path.basename(test_A_files[idx]).split(".")[0]
 			image_path = os.path.join(self.result_dir, base_path)
 
-			test_sty_A_con_B, test_sty_B_con_A, test_recon_A, test_recon_B, test_cycle_A, test_cycle_B = \
-			self.sess.run([self.test_sty_A_con_B, self.test_sty_B_con_A, self.test_recon_A, self.test_recon_B, self.test_cycle_A, self.test_cycle_B],\
+			test_sty_A_con_B, test_sty_B_con_A, test_recon_A, test_recon_B = \
+			self.sess.run([self.test_sty_A_con_B, self.test_sty_B_con_A, self.test_recon_A, self.test_recon_B],\
 				feed_dict={self.test_A : image_A, self.test_B : image_B})
 			save_images(image_A, 1, image_path+'image_A.jpg')
 			save_images(image_B, 1, image_path+'image_B.jpg')
@@ -468,8 +480,6 @@ class ZSIT(object):
 			save_images(test_sty_B_con_A, 1, image_path+'test_sty_B_con_A.jpg')
 			save_images(test_recon_A, 1, image_path+'test_recon_A.jpg')
 			save_images(test_recon_B, 1, image_path+'test_recon_B.jpg')
-			save_images(test_cycle_A, 1, image_path+'test_cycle_A.jpg')
-			save_images(test_cycle_B, 1, image_path+'test_cycle_B.jpg')
 			index.write("<tr>")
 			index.write("<td><img src='%s' width='%d' height='%d'></td>" % (base_path+'image_A.jpg' , 150, 150))
 			index.write("<td><img src='%s' width='%d' height='%d'></td>" % (base_path+'image_B.jpg' , 150, 150))
@@ -478,8 +488,6 @@ class ZSIT(object):
 			index.write("<td><img src='%s' width='%d' height='%d'></td>" % ( base_path+'test_sty_B_con_A.jpg' , 150, 150))
 			index.write("<td><img src='%s' width='%d' height='%d'></td>" % ( base_path+'test_recon_A.jpg' , 150, 150))
 			index.write("<td><img src='%s' width='%d' height='%d'></td>" % ( base_path+'test_recon_B.jpg' , 150, 150))
-			index.write("<td><img src='%s' width='%d' height='%d'></td>" % ( base_path+'test_cycle_A.jpg' , 150, 150))
-			index.write("<td><img src='%s' width='%d' height='%d'></td>" % ( base_path+'test_cycle_B.jpg' , 150, 150))
 			index.write("</tr>")
 
 		index.close()
