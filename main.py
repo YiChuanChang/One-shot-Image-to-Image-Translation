@@ -1,4 +1,4 @@
-from ZSIT import ZSIT
+from ZSIT_vector_style import ZSIT
 from utils import *
 import argparse
 import os

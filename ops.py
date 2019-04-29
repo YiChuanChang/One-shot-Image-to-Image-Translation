@@ -1,5 +1,6 @@
 import tensorflow as tf
 import tensorflow.contrib as tf_contrib
+from custom_vgg16 import *
 
 
 weight_init = tf_contrib.layers.variance_scaling_initializer() # kaming init for encoder / decoder
@@ -194,3 +195,29 @@ def discriminator_loss(real, fake):
 		loss.append(real_loss + fake_loss)
 
 	return sum(loss)
+
+def perceptual_loss(image_A, image_B, vgg_weight, batchsize):
+
+	vgg_A = custom_Vgg16(image_A, data_dict=vgg_weight)
+	feature_A = [vgg_A.conv1_2, vgg_A.conv2_2, vgg_A.conv3_3, vgg_A.conv4_3, vgg_A.conv5_3]
+	gram_A = [gram_matrix(l) for l in feature_A]
+
+	vgg_B = custom_Vgg16(image_B, data_dict=vgg_weight)
+	feature_B = [vgg_B.conv1_2, vgg_B.conv2_2, vgg_B.conv3_3, vgg_B.conv4_3, vgg_B.conv5_3]
+	gram_B = [gram_matrix(l) for l in feature_A]
+
+	# compute feature loss
+	loss_f = tf.zeros(batchsize, tf.float32)
+	for f_A, f_B in zip(feature_A, feature_B):
+		loss_f += tf.reduce_mean(tf.subtract(f_A, f_B) ** 2, [1, 2, 3])
+
+	# compute style loss
+	gram = [gram_matrix(l) for l in feature]
+	loss_s = tf.zeros(batchsize, tf.float32)
+	for g_A, g_B in zip(gram_A, gram_B):
+		loss_s += tf.reduce_mean(tf.subtract(g_A, g_B) ** 2, [1, 2])
+
+	return loss_f, loss_s
+
+
+
