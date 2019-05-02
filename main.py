@@ -1,4 +1,4 @@
-from ZSIT_vector_style import ZSIT
+from ZSIT import ZSIT
 from utils import *
 import argparse
 import os
@@ -19,25 +19,24 @@ def parse_args():
 	parser.add_argument('--sample_dir', type=str, default='samples',
 		help='Directory name to save the samples on training')
 
-	parser.add_argument('--dataset', type=str, default='maps', help='dataset_name')
+	parser.add_argument('--datasets', type=list, default=['cityscapes', 'maps', 'ukiyoe2photo', 'vangogh2photo', 'cezanne2photo'], help='dataset_name')
 	parser.add_argument('--augment_flag', type=bool, default=True, help='Image augmentation use or not')
-	parser.add_argument('--epoch', type=int, default=20, help='The number of epochs to run')
-	parser.add_argument('--iteration', type=int, default=10000, help='The number of training iterations')
+	parser.add_argument('--epoch', type=int, default=40, help='The number of epochs to run')
+	parser.add_argument('--iteration', type=int, default=1000, help='The number of training iterations')
 	parser.add_argument('--batch_size', type=int, default=1, help='The batch size')
-	parser.add_argument('--print_freq', type=int, default=1000, help='The number of image_print_freq')
-	parser.add_argument('--save_freq', type=int, default=1000, help='The number of ckpt_save_freq')
-	parser.add_argument('--lr', type=float, default=0.0001, help='The learning rate')
+	parser.add_argument('--print_freq', type=int, default=50, help='The number of image_print_freq')
+	parser.add_argument('--save_freq', type=int, default=50, help='The number of ckpt_save_freq')
+	parser.add_argument('--lr', type=float, default=0.001, help='The learning rate')
 
 	parser.add_argument('--img_h', type=int, default=256, help='The size of image hegiht')
 	parser.add_argument('--img_w', type=int, default=256, help='The size of image width')
 	parser.add_argument('--img_c', type=int, default=3, help='The size of image channel')
 
 	parser.add_argument('--gan_w', type=float, default=1.0, help='weight of adversarial loss')
-	parser.add_argument('--con_w', type=float, default=0.0, help='weight of content reconstruction loss')
-	parser.add_argument('--sty_w', type=float, default=0.0, help='weight of style reconstruction loss')
-	parser.add_argument('--cyc_w', type=float, default=0.0, help='weight of cycle consistency loss')
-	parser.add_argument('--rec_w', type=float, default=0.0, help='weight of image reconstruction loss')
-	parser.add_argument('--per_w', type=float, default=10.0, help='weight of perceptual loss')
+	parser.add_argument('--con_w', type=float, default=3.0, help='weight of content reconstruction loss')
+	parser.add_argument('--sty_w', type=float, default=1.0, help='weight of style reconstruction loss')
+	parser.add_argument('--rec_w', type=float, default=1.0, help='weight of image reconstruction loss')
+	parser.add_argument('--per_w', type=float, default=0.0, help='weight of perceptual loss')
 
 	parser.add_argument('--ch', type=int, default=64, help='base channel number per layer')
 	
@@ -100,3 +99,4 @@ def main():
 
 if __name__ == '__main__':
 	main()
+

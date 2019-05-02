@@ -69,6 +69,15 @@ def spectral_norm(w, iteration=1):
 
     return w_norm
 
+def AdaIn(content, style, alpha=1, epsilon=1e-5):
+	content_mean, content_variance = tf.nn.moments(content, [1,2], keep_dims=True)
+	style_mean, style_variance = tf.nn.moments(style, [1,2], keep_dims=True)
+	normalized_content = tf.nn.batch_normalization(content, content_mean, \
+						content_variance, style_mean, tf.sqrt(style_variance), epsilon)
+	normalized_content = alpha*normalized_content + (1-alpha)*content
+
+	return normalized_content
+
 ##################################################################################
 # Sampling
 ##################################################################################
@@ -213,7 +222,7 @@ def perceptual_loss_style(image_A, image_B, vgg_weight, batchsize):
 
 	vgg_B = custom_Vgg16(image_B, data_dict=vgg_weight)
 	feature_B = [vgg_B.conv1_2, vgg_B.conv2_2, vgg_B.conv3_3, vgg_B.conv4_3, vgg_B.conv5_3]
-	gram_B = [gram_matrix(l) for l in feature_A]
+	gram_B = [gram_matrix(l) for l in feature_B]
 
 	# compute style loss
 	loss_s = tf.zeros(batchsize, tf.float32)
@@ -225,10 +234,10 @@ def perceptual_loss_style(image_A, image_B, vgg_weight, batchsize):
 
 def perceptual_loss_content(image_A, image_B, vgg_weight, batchsize):
 	vgg_A = custom_Vgg16(image_A, data_dict=vgg_weight)
-	feature_A = [vgg_A.conv1_2, vgg_A.conv2_2, vgg_A.conv3_3, vgg_A.conv4_3, vgg_A.conv5_3]
+	feature_A = [vgg_A.conv3_3, vgg_A.conv4_3]
 
 	vgg_B = custom_Vgg16(image_B, data_dict=vgg_weight)
-	feature_B = [vgg_B.conv1_2, vgg_B.conv2_2, vgg_B.conv3_3, vgg_B.conv4_3, vgg_B.conv5_3]
+	feature_B = [vgg_B.conv3_3, vgg_B.conv4_3]
 
 	# compute feature loss
 	loss_f = tf.zeros(batchsize, tf.float32)
