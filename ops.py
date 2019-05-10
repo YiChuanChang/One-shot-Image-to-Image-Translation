@@ -22,6 +22,104 @@ def tanh(x):
 ##################################################################################
 # Normalization function
 ##################################################################################
+def nearest_patch_swapping(content_features, style_features, patch_size=3):
+	# channels for both the content and style, must be the same
+	c_shape = tf.shape(content_features)
+	s_shape = tf.shape(style_features)
+	channel_assertion = tf.Assert(
+		tf.equal(c_shape[3], s_shape[3]), ['number of channels  must be the same'])
+
+	with tf.control_dependencies([channel_assertion]):
+		# spatial shapes for style and content features
+		c_height, c_width, c_channel = c_shape[1], c_shape[2], c_shape[3]
+
+		# convert the style features into convolutional kernels
+		style_kernels = tf.extract_image_patches(
+			style_features, ksizes=[1, patch_size, patch_size, 1],
+			strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='SAME')
+		style_kernels = tf.squeeze(style_kernels, axis=0)
+		style_kernels = tf.transpose(style_kernels, perm=[2, 0, 1])
+
+		# gather the conv and deconv kernels
+		v_height, v_width = style_kernels.get_shape().as_list()[1:3]
+		deconv_kernels = tf.reshape(
+			style_kernels, shape=(patch_size, patch_size, c_channel, v_height*v_width))
+
+		kernels_norm = tf.norm(style_kernels, axis=0, keep_dims=True)
+		kernels_norm = tf.reshape(kernels_norm, shape=(1, 1, 1, v_height*v_width))
+
+		# calculate the normalization factor
+		mask = tf.ones((c_height, c_width), tf.float32)
+		fullmask = tf.zeros((c_height+patch_size-1, c_width+patch_size-1), tf.float32)
+		for x in range(patch_size):
+			for y in range(patch_size):
+				paddings = [[x, patch_size-x-1], [y, patch_size-y-1]]
+				padded_mask = tf.pad(mask, paddings=paddings, mode="CONSTANT")
+				fullmask += padded_mask
+		pad_width = int((patch_size-1)/2)
+		deconv_norm = tf.slice(fullmask, [pad_width, pad_width], [c_height, c_width])
+		deconv_norm = tf.reshape(deconv_norm, shape=(1, c_height, c_width, 1))
+
+		########################
+		# starting convolution #
+		########################
+		# padding operation
+		pad_total = patch_size - 1
+		pad_beg = pad_total // 2
+		pad_end = pad_total - pad_beg
+		paddings = [[0, 0], [pad_beg, pad_end], [pad_beg, pad_end], [0, 0]]
+
+		# convolutional operations
+		net = tf.pad(content_features, paddings=paddings, mode="REFLECT")
+		net = tf.nn.conv2d(
+			net,
+			tf.div(deconv_kernels, kernels_norm+1e-7),
+			strides=[1, 1, 1, 1],
+			padding='VALID')
+		# find the maximum locations
+		best_match_ids = tf.argmax(net, axis=3)
+		best_match_ids = tf.cast(
+			tf.one_hot(best_match_ids, depth=v_height*v_width), dtype=tf.float32)
+
+		# find the patches and warping the output
+		unnormalized_output = tf.nn.conv2d_transpose(
+			value=best_match_ids,
+			filter=deconv_kernels,
+			output_shape=(c_shape[0], c_height+pad_total, c_width+pad_total, c_channel),
+			strides=[1, 1, 1, 1],
+			padding='VALID')
+		unnormalized_output = tf.slice(unnormalized_output, [0, pad_beg, pad_beg, 0], c_shape)
+		output = tf.div(unnormalized_output, deconv_norm)
+		output = tf.reshape(output, shape=c_shape)
+
+		# output the swapped feature maps
+		return output
+
+def adain_normalization(features):
+	epsilon = 1e-7
+	mean_features, colorization_kernels = tf.nn.moments(features, [1, 2], keep_dims=True)
+	normalized_features = tf.div(
+		tf.subtract(features, mean_features), tf.sqrt(tf.add(colorization_kernels, epsilon)))
+	return normalized_features, colorization_kernels, mean_features
+
+def avatar_norm(style, content, patch_size=3, ratio=1.0):
+    # feature projection (AdaIn)
+	projected_content_features, _, _ = \
+		adain_normalization(content)
+	projected_style_features, style_kernels, mean_style_features = \
+		adain_normalization(style)
+
+	# feature rearrangement 
+	rearranged_features = nearest_patch_swapping(
+		projected_content_features, projected_style_features, patch_size=patch_size)
+	rearranged_features = ratio * rearranged_features + \
+		(1 - ratio) * projected_content_features
+
+	# feature reconstruction (AdaIn)
+	reconstructed_features = tf.sqrt(style_kernels) * rearranged_features + mean_style_features
+	
+	return reconstructed_features
+
 
 def adaptive_instance_norm(content, gamma, beta, epsilon=1e-5):
 	# gamma, beta = style_mean, style_std from MLP
@@ -170,8 +268,8 @@ def flatten(x) :
 ##################################################################################
 # Calculate Loss
 ##################################################################################
-def L2_loss(v, eps=1e-12):
-	return v / (tf.reduce_sum(v ** 2) ** 0.5 + eps)
+def L2_loss(x, y):
+	return tf.losses.mean_squared_error(x, y)
 
 def L1_loss(x, y):
 	loss = tf.reduce_mean(tf.abs(x - y))
@@ -234,10 +332,10 @@ def perceptual_loss_style(image_A, image_B, vgg_weight, batchsize):
 
 def perceptual_loss_content(image_A, image_B, vgg_weight, batchsize):
 	vgg_A = custom_Vgg16(image_A, data_dict=vgg_weight)
-	feature_A = [vgg_A.conv3_3, vgg_A.conv4_3]
+	feature_A = [vgg_A.conv1_1, vgg_A.conv2_1, vgg_A.conv3_1, vgg_A.conv4_1]
 
 	vgg_B = custom_Vgg16(image_B, data_dict=vgg_weight)
-	feature_B = [vgg_B.conv3_3, vgg_B.conv4_3]
+	feature_B = [vgg_B.conv1_1, vgg_B.conv2_1, vgg_B.conv3_1, vgg_B.conv4_1]
 
 	# compute feature loss
 	loss_f = tf.zeros(batchsize, tf.float32)
@@ -245,5 +343,25 @@ def perceptual_loss_content(image_A, image_B, vgg_weight, batchsize):
 		loss_f += tf.reduce_mean(tf.subtract(f_A, f_B) ** 2, [1, 2, 3])
 
 	return tf.squeeze(loss_f)
+
+def compute_total_variation_loss(inputs, weights=1, scope=None):
+	"""compute the total variation loss L1 norm"""
+	inputs_shape = tf.shape(inputs)
+	height = inputs_shape[1]
+	width = inputs_shape[2]
+
+	with tf.variable_scope(scope, 'total_variation_loss', [inputs]):
+		loss_y = tf.losses.absolute_difference(
+			tf.slice(inputs, [0, 0, 0, 0], [-1, height-1, -1, -1]),
+			tf.slice(inputs, [0, 1, 0, 0], [-1, -1, -1, -1]),
+			weights=weights,
+			scope='loss_y')
+		loss_x = tf.losses.absolute_difference(
+			tf.slice(inputs, [0, 0, 0, 0], [-1, -1, width-1, -1]),
+			tf.slice(inputs, [0, 0, 1, 0], [-1, -1, -1, -1]),
+			weights=weights,
+			scope='loss_x')
+		loss = loss_y + loss_x
+		return loss
 
 

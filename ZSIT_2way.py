@@ -112,23 +112,24 @@ class ZSIT(object):
 
 			return x, content_layers
 
-	def decoder(self, style, content, content_layers, reuse=False, scope='decoder'):
+	def decoder(self, style, content, style_layers, stylize=False, reuse=False, scope='decoder'):
 		channel = self.ch
 		with tf.variable_scope(scope, reuse=reuse):
-			# if(self.useUNet):
-			# 	x = tf.concat([content, style, content_layers[self.n_cont_downsample]], 3)
-			# else:
-			# 	x = tf.concat([content, style], 3)
-			# print(content)
-			x = AdaIn(content, style)
+			if(stylize):
+				x = avatar_norm(style, content)
+			else:
+				x = content
 
 			for i in range(self.n_upsample):
+				if(stylize and i==0):
+					x = AdaIn(x, style_layers[2])
 				x = up_sample(x, scale_factor = 2)
 				x = conv(x, channel//2, kernel=5, stride=1, pad=2, \
 					pad_type='reflect', scope='conv_'+str(i))
 				x = instance_norm(x, scope='ins_'+str(i))
-				if(self.useUNet):
-					x = tf.concat([x, content_layers[self.n_cont_downsample-i-1]], 3)
+
+				# if(self.useUNet):
+				# 	x = tf.concat([x, content_layers[self.n_cont_downsample-i-1]], 3)
 				x = relu(x)
 				channel = channel//2
 			x = conv(x, channels=self.img_c, kernel=7, stride=1, \
@@ -194,22 +195,6 @@ class ZSIT(object):
 	def build_network(self):
 		self.lr = tf.placeholder(tf.float32, name='learning_rate')
 
-		''' Get singel Dataset '''
-		# Image_Data_Class = ImageData(self.img_h, self.img_w, self.img_c, \
-		# 	self.augment_flag)
-		# trainA = tf.data.Dataset.from_tensor_slices(self.trainA_dataset)
-		# trainB = tf.data.Dataset.from_tensor_slices(self.trainB_dataset)
-
-		# trainA = trainA.prefetch(self.batch_size).shuffle(self.dataset_num).map(Image_Data_Class.image_processing, num_parallel_calls=8).apply(batch_and_drop_remainder(self.batch_size)).repeat()
-		# trainB = trainB.prefetch(self.batch_size).shuffle(self.dataset_num).map(Image_Data_Class.image_processing, num_parallel_calls=8).apply(batch_and_drop_remainder(self.batch_size)).repeat()
-
-		# trainA_iterator = trainA.make_one_shot_iterator()
-		# trainB_iterator = trainB.make_one_shot_iterator()
-
-
-		# self.domain_A = trainA_iterator.get_next()
-		# self.domain_B = trainB_iterator.get_next()
-
 		''' Get mutipul datasets '''
 		self.dataset_now = tf.placeholder(tf.string, name='dataset_now')
 		Image_Data_Class = ImageData(self.img_h, self.img_w, self.img_c, self.augment_flag)
@@ -225,38 +210,75 @@ class ZSIT(object):
 			trainB = trainB.prefetch(self.batch_size).shuffle(dataset_num).map(Image_Data_Class.image_processing, num_parallel_calls=8).apply(batch_and_drop_remainder(self.batch_size)).repeat()
 			trainA_iterator[dataset] = trainA.make_one_shot_iterator()
 			trainB_iterator[dataset] = trainB.make_one_shot_iterator()
-		def f1(): return trainA_iterator['maps'].get_next(), trainB_iterator['maps'].get_next()
-		def f2(): return trainA_iterator['cezanne2photo'].get_next(), trainB_iterator['cezanne2photo'].get_next()
-		def f3(): return trainA_iterator['ukiyoe2photo'].get_next(), trainB_iterator['ukiyoe2photo'].get_next()
-		def f4(): return trainA_iterator['vangogh2photo'].get_next(), trainB_iterator['vangogh2photo'].get_next()
-		def f5(): return trainA_iterator['cityscapes'].get_next(), trainB_iterator['cityscapes'].get_next()
+		def f1(): return trainA_iterator[self.datasets[0]].get_next(), trainB_iterator[self.datasets[0]].get_next()
+		def f2(): return trainA_iterator[self.datasets[1]].get_next(), trainB_iterator[self.datasets[1]].get_next()
+		# def f3(): return trainA_iterator['ukiyoe2photo'].get_next(), trainB_iterator['ukiyoe2photo'].get_next()
+		# def f4(): return trainA_iterator['vangogh2photo'].get_next(), trainB_iterator['vangogh2photo'].get_next()
+		# def f5(): return trainA_iterator['cityscapes'].get_next(), trainB_iterator['cityscapes'].get_next()
 
 		self.domain_A, self.domain_B = \
-			tf.case({tf.equal(self.dataset_now, tf.constant('maps', dtype=tf.string)): f1, \
-					tf.equal(self.dataset_now, tf.constant('cezanne2photo', dtype=tf.string)): f2, \
-					tf.equal(self.dataset_now, tf.constant('ukiyoe2photo', dtype=tf.string)): f3, \
-					tf.equal(self.dataset_now, tf.constant('vangogh2photo', dtype=tf.string)): f4, \
-					tf.equal(self.dataset_now, tf.constant('cityscapes', dtype=tf.string)): f5, \
+			tf.case({tf.equal(self.dataset_now, tf.constant(self.datasets[0], dtype=tf.string)): f1, \
+					tf.equal(self.dataset_now, tf.constant(self.datasets[1], dtype=tf.string)): f2, \
+					# tf.equal(self.dataset_now, tf.constant('ukiyoe2photo', dtype=tf.string)): f3, \
+					# tf.equal(self.dataset_now, tf.constant('vangogh2photo', dtype=tf.string)): f4, \
+					# tf.equal(self.dataset_now, tf.constant('cityscapes', dtype=tf.string)): f5, \
 					}, default=f1, exclusive=True)
 
+
+		###################### Step 1 Training #########################
 		''' Define encoder, decoder, discriminator '''
 		# encoding
-		style_A, content_A, content_A_layers = self.Encoder(self.domain_A)
-		style_B, content_B, content_B_layers = self.Encoder(self.domain_B, reuse=True)
-		# decoding (same domain)
-		sty_A_con_A = self.Decoder(style_A, content_A, content_A_layers)
-		sty_B_con_B = self.Decoder(style_B, content_B, content_B_layers, reuse=True)
-		# decoding (cross domain)
-		sty_A_con_B = self.Decoder(style_A, content_B, content_B_layers, reuse=True)
-		sty_B_con_A = self.Decoder(style_B, content_A, content_A_layers, reuse=True)
+		content_A, content_A_layers = self.content_encoder(self.domain_A, reuse=False, scope='content_encoder')
+		content_B, content_B_layers = self.content_encoder(self.domain_B, reuse=True, scope='content_encoder')
 
-		# re-encoding
-		style_A_re, content_B_re, content_B_re_layers = self.Encoder(sty_A_con_B, reuse=True)
-		style_B_re, content_A_re, content_A_re_layers = self.Encoder(sty_B_con_A, reuse=True)
+		# decoding 
+		sty_A_con_A = self.decoder(content_A, content_A, content_A_layers, reuse=False, scope='decoder_A')
+		sty_B_con_B = self.decoder(content_B, content_B, content_B_layers, reuse=True, scope='decoder_A')
 
-		# decode again for cycle loss
-		# cycle_A = self.Decoder(style_A, content_A_re, content_A_re_layers, reuse=True)
-		# cycle_B = self.Decoder(style_B, content_B_re, content_B_re_layers, reuse=True)
+		# define loss
+		# 1) reconstruction loss
+		loss_recon_A_1 = L2_loss(sty_A_con_A, self.domain_A)
+		loss_recon_B_1 = L2_loss(sty_B_con_B, self.domain_B)
+
+		# 2) content loss
+		vgg16_weight = loadWeightsData('./vgg16.npy')
+		perceptual_loss_A_1 = perceptual_loss_content(sty_A_con_A, self.domain_A, vgg16_weight, batchsize=1)
+		perceptual_loss_B_1 = perceptual_loss_content(sty_B_con_B, self.domain_B, vgg16_weight, batchsize=1)
+		
+		# 3) total variation loss
+		tv_loss_A = compute_total_variation_loss(sty_A_con_A)
+		tv_loss_B = compute_total_variation_loss(sty_B_con_B)
+		self.Generator_loss_1 = 10*(loss_recon_A_1+loss_recon_B_1)+\
+							1*(perceptual_loss_A_1+perceptual_loss_B_1)+\
+							10*(tv_loss_A+tv_loss_B)
+
+		# training operation
+		all_tf_vars = tf.trainable_variables()
+		content_vars = [var for var in all_tf_vars if 'content_encoder' in var.name]
+		decoder_A_vars = [var for var in all_tf_vars if 'decoder_A' in var.name]
+		G_1_vars = content_vars + decoder_A_vars
+
+		self.all_G_loss_1 = tf.summary.scalar("Generator_loss", self.Generator_loss_1)
+		self.G_optim_1 = tf.train.AdamOptimizer(self.lr, beta1=0.5, \
+			beta2=0.999).minimize(self.Generator_loss_1, var_list=G_1_vars)
+
+		###################### Step 2 Training #########################
+		sty_A_con_B = self.decoder(content_A, content_B, content_A_layers, reuse=True, \
+						stylize=True, scope='decoder_A')
+		sty_B_con_A = self.decoder(content_B, content_A, content_B_layers, reuse=False, \
+						stylize=True, scope='decoder_B')
+
+		cycle_content_A, cycle_content_A_layers = self.content_encoder(sty_B_con_A, reuse=True, scope='content_encoder')
+		cycle_content_B, cycle_content_B_layers = self.content_encoder(sty_A_con_B, reuse=True, scope='content_encoder')
+
+		cycle_A = self.decoder(cycle_content_B, cycle_content_A, cycle_content_B_layers, reuse=True, \
+						stylize=True, scope='decoder_A')
+		cycle_B = self.decoder(cycle_content_A, cycle_content_B, cycle_content_A_layers, reuse=True, \
+						stylize=True, scope='decoder_B')
+
+		cycle_loss_A = L2_loss(cycle_A, self.domain_A)
+		cycle_loss_B = L2_loss(cycle_B, self.domain_B)
+
 
 		real_A_logit, real_B_logit = self.Discriminator_real(self.domain_A, self.domain_B)
 		fake_A_logit, fake_B_logit = self.Discriminator_fake(sty_A_con_B, sty_B_con_A)
@@ -264,107 +286,60 @@ class ZSIT(object):
 		# define loss
 		G_loss_A = generator_loss(fake_A_logit)
 		G_loss_B = generator_loss(fake_B_logit)
-		self.GAN_loss = G_loss_A + G_loss_B
-
-		recon_loss_A = L1_loss(sty_A_con_A, self.domain_A) # reconstruction
-		recon_loss_B = L1_loss(sty_B_con_B, self.domain_B) # reconstruction
-		self.recon_loss = recon_loss_A + recon_loss_B
-
-
-		content_constrain_loss_A = L1_loss(sty_B_con_A, self.domain_A) # 
-		content_constrain_loss_B = L1_loss(sty_A_con_B, self.domain_B) # 
-		self.content_constrain_loss = content_constrain_loss_A + content_constrain_loss_B
-
-
-		recon_style_loss_A = L1_loss(style_A_re, style_A)
-		recon_style_loss_B = L1_loss(style_B_re, style_B)
-		self.recon_style_loss = recon_style_loss_A + recon_style_loss_B
-
-		recon_content_loss_A = L1_loss(content_A_re, content_A)
-		recon_content_loss_B = L1_loss(content_B_re, content_B)
-		self.recon_content_loss = recon_content_loss_A + recon_content_loss_B
-
-		# perceptual loss
-		vgg16_weight = loadWeightsData('./vgg16.npy')
-		perceptual_style_loss_A = perceptual_loss_style(sty_A_con_A, sty_A_con_B, vgg16_weight, batchsize=1)
-		perceptual_style_loss_B = perceptual_loss_style(sty_B_con_A, sty_B_con_B, vgg16_weight, batchsize=1)
-		perceptual_content_loss_A = perceptual_loss_content(sty_A_con_A, sty_B_con_A, vgg16_weight, batchsize=1)
-		perceptual_content_loss_B = perceptual_loss_content(sty_A_con_B, sty_B_con_B, vgg16_weight, batchsize=1)
-		perceptual_style = perceptual_style_loss_A + perceptual_style_loss_B
-		perceptual_content = perceptual_content_loss_A + perceptual_content_loss_B
-		self.perceptual_loss = perceptual_style + 10.0*perceptual_content
-
-
-		# cycle_A_loss = L1_loss(cycle_A, self.domain_A)
-		# cycle_B_loss = L1_loss(cycle_B, self.domain_B)
+		self.Generator_loss_2 = (G_loss_A + G_loss_B) + self.Generator_loss_1*0.1 + (cycle_loss_A + cycle_loss_B)*0.5
 
 		D_loss_A = discriminator_loss(real_A_logit, fake_A_logit)
 		D_loss_B = discriminator_loss(real_B_logit, fake_B_logit)
-
-		self.Generator_loss = self.gan_w * self.GAN_loss + \
-						self.rec_w * self.recon_loss + \
-						self.sty_w * self.recon_style_loss + \
-						self.con_w * self.recon_content_loss + \
-						self.per_w * self.perceptual_loss
-						# + self.cyc_w * (cycle_A_loss + cycle_B_loss)
-
 		self.Discriminator_loss = D_loss_A + D_loss_B
 
 		''' Training Operations '''
 		all_tf_vars = tf.trainable_variables()
-		style_vars = [var for var in all_tf_vars if 'style' in var.name]
-		content_vars = [var for var in all_tf_vars if 'content' in var.name]
-		G_vars = [var for var in all_tf_vars if 'decoder' in var.name or 'encoder' in var.name]
+		decoder_B_vars = [var for var in all_tf_vars if 'decoder_B' in var.name]
+		decoder_vars = decoder_A_vars + decoder_B_vars
 		D_vars = [var for var in all_tf_vars if 'discriminator' in var.name]
 		
-		self.G_optim = tf.train.AdamOptimizer(self.lr, beta1=0.5, \
-			beta2=0.999).minimize(self.Generator_loss, var_list=G_vars)
+		self.G_optim_2 = tf.train.AdamOptimizer(self.lr, beta1=0.5, name='Adam_2',\
+			beta2=0.999).minimize(self.Generator_loss_2, var_list=decoder_vars)
 		self.D_optim = tf.train.AdamOptimizer(self.lr, beta1=0.5, \
 			beta2=0.999).minimize(self.Discriminator_loss, var_list=D_vars)
 
-		''' Summary '''
-		self.all_G_loss = tf.summary.scalar("Generator_loss", self.Generator_loss)
-		self.all_D_loss = tf.summary.scalar("Discriminator_loss", self.Discriminator_loss)
-		self.style_loss = tf.summary.scalar("Style_loss", self.recon_style_loss)
-		self.content_loss = tf.summary.scalar("Content_loss", self.recon_content_loss)
-		self.D_A_loss = tf.summary.scalar("D_A_loss", D_loss_A)
-		self.D_B_loss = tf.summary.scalar("D_B_loss", D_loss_B)
-		self.perceptual_style = tf.summary.scalar("perceptual_style", perceptual_style)
-		self.perceptual_content = tf.summary.scalar("perceptual_content", perceptual_content)
-		self.P_loss = tf.summary.scalar("perceptual_loss", self.perceptual_loss)
+		self.update_weights = [tf.assign(new, old) for (new, old) in \
+				zip(decoder_B_vars, decoder_A_vars)]
+		
 
-		self.G_loss = tf.summary.merge([self.all_G_loss, self.style_loss, self.content_loss, self.perceptual_style, self.perceptual_content, self.P_loss])
-		self.D_loss = tf.summary.merge([self.all_D_loss, self.D_A_loss, self.D_B_loss])
+		''' Summary '''
+		self.Generator_loss_1_s = tf.summary.scalar("Generator_loss_1", self.Generator_loss_1)
+		self.Generator_loss_2_s = tf.summary.scalar("Generator_loss_2", self.Generator_loss_2)
+		self.D_loss_A_s = tf.summary.scalar("D_loss_A", D_loss_A)
+		self.D_loss_B_s = tf.summary.scalar("D_loss_B", D_loss_B)
+		self.D_loss_s = tf.summary.scalar("Discriminator_loss", self.Discriminator_loss)
+
+		self.G_loss = tf.summary.merge([self.Generator_loss_1_s, self.Generator_loss_2_s])
+		self.D_loss = tf.summary.merge([self.D_loss_s, self.D_loss_A_s, self.D_loss_B_s])
 
 		''' Images '''
 
-		self.fake_A = sty_A_con_B
-		self.fake_B = sty_B_con_A
+		self.sty_A_con_B = sty_A_con_B
+		self.sty_B_con_A = sty_B_con_A
 		self.real_A = self.domain_A
 		self.real_B = self.domain_B
 		self.reco_A = sty_A_con_A
 		self.reco_B = sty_B_con_B
-		# self.cycl_A = cycle_A
-		# self.cycl_B = cycle_B
+		self.cycle_A = cycle_A
+		self.cycle_B = cycle_B
 
 		''' Test '''
 		self.test_A = tf.placeholder(tf.float32, [1, self.img_h, self.img_w, self.img_c], name='test_A')
 		self.test_B = tf.placeholder(tf.float32, [1, self.img_h, self.img_w, self.img_c], name='test_B')
-
-		test_style_A, test_content_A, test_content_A_layers = self.Encoder(self.test_A, reuse=True)
-		test_style_B, test_content_B, test_content_B_layers = self.Encoder(self.test_B, reuse=True)
-
-		self.test_sty_A_con_B = self.Decoder(test_style_A, test_content_B, test_content_B_layers, reuse=True)
-		self.test_sty_B_con_A = self.Decoder(test_style_B, test_content_A, test_content_A_layers, reuse=True)
-
-		test_style_A_re, test_content_B_re, test_content_B_re_layers = self.Encoder(self.test_sty_A_con_B, reuse=True)
-		test_style_B_re, test_content_A_re, test_content_A_re_layers = self.Encoder(self.test_sty_B_con_A, reuse=True)
-		self.test_recon_A = self.Decoder(test_style_A, test_content_A, test_content_A_re_layers, reuse=True)
-		self.test_recon_B = self.Decoder(test_style_B, test_content_B, test_content_B_re_layers, reuse=True)
-
-		# self.test_cycle_A = self.Decoder(test_style_A, test_content_A_re, test_content_A_re_layers, reuse=True)
-		# self.test_cycle_B = self.Decoder(test_style_B, test_content_B_re, test_content_B_re_layers, reuse=True)
+		test_content_A, test_content_A_layers = self.content_encoder(self.test_A, reuse=True, scope='content_encoder')
+		test_content_B, test_content_B_layers = self.content_encoder(self.test_B, reuse=True, scope='content_encoder')
 		
+		self.test_recon_A = self.decoder(test_content_A, test_content_A, test_content_A_layers, reuse=True, scope='decoder_A')
+		self.test_recon_B = self.decoder(test_content_B, test_content_B, test_content_B_layers, reuse=True, scope='decoder_B')
+		
+		self.test_sty_A_con_B = self.decoder(test_content_A, test_content_B, test_content_B_layers, stylize=True, reuse=True, scope='decoder_A')
+		self.test_sty_B_con_A = self.decoder(test_content_B, test_content_A, test_content_A_layers, stylize=True, reuse=True, scope='decoder_B')
+
 	##################################################################################
 	# Operations
 	##################################################################################
@@ -374,11 +349,7 @@ class ZSIT(object):
 		tf.global_variables_initializer().run()
 
 		# saver to save model
-		var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='content_encoder')
-		var_list += tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='style_encoder')
-		var_list += tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='decoder')
-	
-		self.saver = tf.train.Saver(var_list=var_list)
+		self.saver = tf.train.Saver()
 
 		# summary writer
 		self.writer = tf.summary.FileWriter(self.log_dir + '/' + self.model_dir, self.sess.graph)
@@ -402,54 +373,70 @@ class ZSIT(object):
 		index_path = os.path.join(self.sample_dir, 'index.html')
 		index = open(index_path, 'a')
 		index.write("<html><body><table><tr>")
-		index.write("<th>image_A</th> <th>image_B</th><th>styA_conB</th><th>styB_conA</th>\
-			<th>recon_A</th><th>recon_B</th></tr>")
+		index.write("<th>image_A</th><th>image_B</th><th>styA_conB</th><th>styB_conA</th>\
+			<th>recon_A</th><th>recon_B</th><th>cycle_A</th><th>cycle_B</th></tr>")
 		index.close
+
 		for epoch in range(start_epoch, self.epoch+1):
-			lr = self.init_lr * pow(0.5, epoch)
-
-			# reset discriminator when change training dataset
-			if(epoch%15==0):
-				tf.global_variables_initializer().run()
-				self.load(self.checkpoint_dir)
-				print(' [*]----- Reset Discriminator -----[!] ')
-
-			# defaul interation = 100000
 			for idx in range(start_batch_id, self.iteration):
 
-				# Update G
-				batch_A_images, batch_B_images, fake_A, fake_B, reco_A, reco_B, _, g_loss, gan_loss, recon_loss, recon_style_loss, recon_content_loss, per_loss, summary_str\
-					= self.sess.run([
-						self.real_A, 
-						self.real_B, 
-						self.fake_A, 
-						self.fake_B,
-						self.reco_A, 
-						self.reco_B,
-						self.G_optim, 
-						self.Generator_loss,  ##
-						self.GAN_loss, ##
-						self.recon_loss, ##
-						self.recon_style_loss, ##
-						self.recon_content_loss, ##
-						self.perceptual_loss, ##
-						self.G_loss], feed_dict={self.lr:lr, self.dataset_now: self.datasets[epoch//15]})
-				self.writer.add_summary(summary_str, counter)
+				if(epoch<20):
+					## step 1 training
+					# train an auto encoder
+					lr = self.init_lr
+					# Update G
+					batch_A_images, batch_B_images, sty_A_con_B, sty_B_con_A, reco_A, reco_B, cycle_A, cycle_B, _, g_loss, summary_str\
+						= self.sess.run([
+							self.real_A, 
+							self.real_B, 
+							self.sty_A_con_B, 
+							self.sty_B_con_A,
+							self.reco_A, 
+							self.reco_B,
+							self.cycle_A, 
+							self.cycle_B,
+							self.G_optim_1, 
+							self.Generator_loss_1,
+							self.G_loss], feed_dict={self.lr:lr, self.dataset_now: self.datasets[0]})
+					self.writer.add_summary(summary_str, counter)
 
-				# update style and content encoder
+					print('Epoch: [%2d] [%6d/%6d] time: %4.4f g_loss: %.6f'\
+						%(epoch, idx, self.iteration, time.time()-start_time, g_loss))
+				else:
+					if(epoch==20):
+						self.sess.run(self.update_weights)
+					## step 2 training
+					# train image to image transfer
+					lr = self.init_lr/10 * pow(0.9, epoch-20)
+					print('lr:' + str(lr))
+					batch_A_images, batch_B_images, sty_A_con_B, sty_B_con_A, reco_A, reco_B, cycle_A, cycle_B, _, g_loss, summary_str\
+						= self.sess.run([
+							self.real_A, 
+							self.real_B, 
+							self.sty_A_con_B, 
+							self.sty_B_con_A,
+							self.reco_A, 
+							self.reco_B,
+							self.cycle_A, 
+							self.cycle_B,
+							self.G_optim_2, 
+							self.Generator_loss_2,
+							self.G_loss], feed_dict={self.lr:lr, self.dataset_now: self.datasets[1]})
+					self.writer.add_summary(summary_str, counter)
+				
+					# Update D
+					_, d_loss, summary_str = self.sess.run([
+						self.D_optim, 
+						self.Discriminator_loss, 
+						self.D_loss_s], feed_dict={self.lr:lr, self.dataset_now: self.datasets[1]})
+					self.writer.add_summary(summary_str, counter)
+					print('Epoch: [%2d] [%6d/%6d] time: %4.4f d_loss: %.6f, g_loss: %.6f'\
+						%(epoch, idx, self.iteration, time.time()-start_time, d_loss, g_loss))
 
-				# Update D
-				_, d_loss, summary_str = self.sess.run([
-					self.D_optim, 
-					self.Discriminator_loss, 
-					self.D_loss], feed_dict={self.lr:lr, self.dataset_now: self.datasets[epoch//15]})
-				self.writer.add_summary(summary_str, counter)
 
 				counter += 1
 				# log out training status now
-				print('Epoch: [%2d] [%6d/%6d] time: %4.4f d_loss: %.6f, g_loss: %.6f, gan_loss:%.6f, recon_loss:%.6f, recon_style_loss:%.6f, recon_content_loss:%.6f, per_loss:%.6f'\
-					%(epoch, idx, self.iteration, time.time()-start_time, d_loss, g_loss, gan_loss, recon_loss, recon_style_loss, recon_content_loss, per_loss))
-
+				
 				if(np.mod(idx+1, self.print_freq)==0):
 
 					index = open(index_path, 'a')
@@ -458,23 +445,29 @@ class ZSIT(object):
 					save_images(batch_B_images, self.batch_size,\
 						'./{}/real_B_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
 
-					save_images(fake_A, self.batch_size,\
-						'./{}/fake_A_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
-					save_images(fake_B, self.batch_size,\
-						'./{}/fake_B_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
+					save_images(sty_A_con_B, self.batch_size,\
+						'./{}/sty_A_con_B_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
+					save_images(sty_B_con_A, self.batch_size,\
+						'./{}/sty_B_con_A_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
 					save_images(reco_A, self.batch_size,\
 						'./{}/reco_A_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
 					save_images(reco_B, self.batch_size,\
 						'./{}/reco_B_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
+					save_images(cycle_A, self.batch_size,\
+						'./{}/cycle_A_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
+					save_images(cycle_B, self.batch_size,\
+						'./{}/cycle_B_{:02d}_{:06d}.jpg'.format(self.sample_dir, epoch, idx+1))
 
 					index.write("<tr>")
 					index.write("<td><img src=real_A_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format(epoch, idx+1 , 150, 150))
 					index.write("<td><img src=real_B_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format(epoch, idx+1 , 150, 150))
 					
-					index.write("<td><img src=fake_A_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
-					index.write("<td><img src=fake_B_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
+					index.write("<td><img src=sty_A_con_B_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
+					index.write("<td><img src=sty_B_con_A_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
 					index.write("<td><img src=reco_A_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
 					index.write("<td><img src=reco_B_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
+					index.write("<td><img src=cycle_A_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
+					index.write("<td><img src=cycle_B_{:02d}_{:06d}.jpg width={:d} height={:d}></td>".format( epoch, idx+1 , 150, 150))
 					index.write("</tr>")
 					index.close()
 
@@ -485,15 +478,10 @@ class ZSIT(object):
 
 	def test(self):
 		tf.global_variables_initializer().run()
-		test_A_files = glob('./dataset/{}/*.*'.format(self.datasets[0] + '/testA'))
-		test_B_files = glob('./dataset/{}/*.*'.format(self.datasets[0] + '/testB'))
+		test_A_files = glob('./dataset/{}/*.*'.format(self.datasets[1] + '/testA'))
+		test_B_files = glob('./dataset/{}/*.*'.format(self.datasets[1] + '/testB'))
 
-
-		var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='content_encoder')
-		var_list += tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='style_encoder')
-		var_list += tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='decoder')
-
-		self.saver = tf.train.Saver(var_list=var_list)
+		self.saver = tf.train.Saver()
 		could_load, checkpoint_counter = self.load(self.checkpoint_dir)
 		self.result_dir = os.path.join(self.result_dir, self.model_dir)
 		check_folder(self.result_dir)
@@ -502,6 +490,9 @@ class ZSIT(object):
 			print(" [*] Load SUCCESS")
 		else :
 			print(" [!] Load failed...")
+		# self.sess.run(self.update_weights)
+		# scope_B = self.sess.run(self.scope_B)
+		# print(scope_B)
 
 		index_path = os.path.join(self.result_dir, 'index.html')
 		index = open(index_path, 'w')
