@@ -7,11 +7,12 @@ import numpy as np
 
 class ImageData:
 	# define input data info
-	def __init__(self, img_h=256, img_w=256, channels=3, augment_flag=False):
+	def __init__(self, img_h=256, img_w=256, channels=3, augment_flag=False, if_style=False):
 		self.img_h = img_h
 		self.img_w = img_w
 		self.channels = channels
 		self.augment_flag = augment_flag
+		self.if_style = if_style
 
 	# read image file from file path
 	def image_processing(self, filename):
@@ -25,9 +26,13 @@ class ImageData:
 			augment_size_h = self.img_h + (30 if self.img_h == 256 else 15)
 			augment_size_w = self.img_w + (30 if self.img_w == 256 else 15)
 			p = random.random()
-			if(p>0.5):
+			if(p>0.2):
 				# random crop and flip
-				img = self.augmentation(img, augment_size_h, augment_size_w)
+				if(self.if_style):
+					img = self.augmentation(img, augment_size_h+100, augment_size_w+100)
+				else:
+					img = self.augmentation(img, augment_size_h, augment_size_w)
+
 		return img
 
 	def augmentation(self, image, aug_img_h, aug_img_w):
@@ -37,6 +42,7 @@ class ImageData:
 		image = tf.image.resize_images(image, [aug_img_h, aug_img_w])
 		image = tf.random_crop(image, ori_image_shape, seed=seed)
 		return image
+
 
 def load_test_data(image_path, size_h=256, size_w=256):
 	img = misc.imread(image_path, mode='RGB')

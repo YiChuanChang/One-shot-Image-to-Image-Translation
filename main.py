@@ -1,4 +1,4 @@
-from ZSIT_2way import ZSIT
+from ZSIT_2way_m import ZSIT
 from utils import *
 import argparse
 import os
@@ -19,9 +19,9 @@ def parse_args():
 	parser.add_argument('--sample_dir', type=str, default='samples',
 		help='Directory name to save the samples on training')
 
-	parser.add_argument('--datasets', type=list, default=['coco', 'cityscapes_one'], help='dataset_name')
+	parser.add_argument('--datasets', type=list, default=['coco', 'ukiyoe2one'], help='dataset_name')
 	parser.add_argument('--augment_flag', type=bool, default=True, help='Image augmentation use or not')
-	parser.add_argument('--epoch', type=int, default=30, help='The number of epochs to run')
+	parser.add_argument('--epoch', type=int, default=25, help='The number of epochs to run')
 	parser.add_argument('--iteration', type=int, default=1000, help='The number of training iterations')
 	parser.add_argument('--batch_size', type=int, default=1, help='The batch size')
 	parser.add_argument('--print_freq', type=int, default=50, help='The number of image_print_freq')
@@ -57,7 +57,7 @@ def parse_args():
 	args.checkpoint_dir = os.path.join(args.exp_name, args.checkpoint_dir)
 	args.result_dir = os.path.join(args.exp_name, args.result_dir)
 	args.log_dir = os.path.join(args.exp_name, args.log_dir)
-	args.sample_dir = os.path.join(args.exp_name, args.sample_dir)
+	args.sample_dir = os.path.join(args.exp_name, args.exp_name+'_'+args.sample_dir)
 
 	check_args(args)
 
