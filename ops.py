@@ -177,6 +177,25 @@ def AdaIn(content, style, alpha=1, epsilon=1e-5):
 
 	return normalized_content
 
+def spade(x, segmap, kernal_size, scope='SPADE'):
+	with tf.variable_scope(scope):
+		# Part 1. generate parameter-free normalizad activations
+		normalized = instance_norm(x)
+		nhidden = 128
+		# Part 2. produce scaling and bias conditioned on semantic map
+		_, h, w, c = x.get_shape().as_list()
+		pw = kernal_size//2
+		segmap = tf.image.resize_nearest_neighbor(segmap, [h, w])
+		actv = conv(segmap, nhidden, stride=1, kernel=kernal_size, pad=pw, scope='conv_actv')
+		actv = relu(actv)
+		gamma = conv(segmap, c, stride=1, kernel=kernal_size, pad=pw, scope='conv_gamma')
+		beta = conv(segmap, c, stride=1, kernel=kernal_size, pad=pw, scope='conv_beta')
+		out = normalized * (1+gamma) + beta
+
+		return out
+
+
+
 ##################################################################################
 # Sampling
 ##################################################################################
@@ -263,6 +282,15 @@ def NonLocalBlock(input_x, out_channels, sub_sample=True, is_bn=True, scope='Non
                 w_y = slim.batch_norm(w_y)
         z = input_x + w_y
         return z
+
+def spadeResBlock(x, seg, scope='spadeResBlock'):
+	with tf.variable_scope(scope):
+		dx = spade(x, seg, kernal_size=3, scope='SPADE_1')
+		dx = spade(dx, seg, kernal_size=3, scope='SPADE_2')
+
+		out = x + dx
+
+		return out
 ##################################################################################
 # Layer
 ##################################################################################

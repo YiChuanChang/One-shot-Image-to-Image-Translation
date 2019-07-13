@@ -1,11 +1,11 @@
-from ZSIT_2way_m import ZSIT
+from ZSIT_2way_m_2 import ZSIT
 from utils import *
 import argparse
 import os
 
 def parse_args():
 	desc = "Tensorflow implementation of ZSIT"
-	parser = argparse.ArgumentParser(description=desc)
+	parser = argparse.ArgumentParser()
 
 	parser.add_argument('--phase', type=str, default='train', help='train or test')
 	parser.add_argument('--exp_name', type=str, default='ZSIT_train', help='folder to save all stuff')
@@ -19,7 +19,7 @@ def parse_args():
 	parser.add_argument('--sample_dir', type=str, default='samples',
 		help='Directory name to save the samples on training')
 
-	parser.add_argument('--datasets', type=list, default=['coco', 'ukiyoe2one'], help='dataset_name')
+	parser.add_argument('--datasets', type=list, default=['coco', 'font'], help='dataset_name')
 	parser.add_argument('--augment_flag', type=bool, default=True, help='Image augmentation use or not')
 	parser.add_argument('--epoch', type=int, default=25, help='The number of epochs to run')
 	parser.add_argument('--iteration', type=int, default=1000, help='The number of training iterations')

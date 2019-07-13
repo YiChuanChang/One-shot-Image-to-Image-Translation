@@ -102,8 +102,6 @@ class ZSIT(object):
 			x = instance_norm(x, scope='ins_0')
 			content_layers.append(x)
 			x = relu(x)
-			x = NonLocalBlock(x, out_channels=channel, scope='NonLocalBlock_0')
-			x = NonLocalBlock(x, out_channels=channel, scope='NonLocalBlock_1')
 
 			for i in range(self.n_cont_downsample):
 				x = conv(x, channel*2, kernel=4, stride=2, pad=1, \
@@ -112,6 +110,9 @@ class ZSIT(object):
 				content_layers.append(x)
 				x = relu(x)
 				channel = channel*2
+
+			x = NonLocalBlock(x, out_channels=channel//2, scope='NonLocalBlock_0')
+			x = NonLocalBlock(x, out_channels=channel//2, scope='NonLocalBlock_1')
 
 			for i in range(self.n_cont_res):
 				# resblock consists of instance_norm and relu
@@ -233,10 +234,12 @@ class ZSIT(object):
 		# encoding
 		content_A, content_A_layers = self.content_encoder(self.domain_A, reuse=False, scope='content_encoder')
 		content_B, content_B_layers = self.content_encoder(self.domain_B, reuse=True, scope='content_encoder')
+		style_A, style_A_layers = self.style_encoder(self.domain_A, reuse=False, scope='style_encoder')
+		style_B, style_B_layers = self.style_encoder(self.domain_B, reuse=True, scope='style_encoder')
 
-		sty_A_con_B = self.decoder(content_A, content_B, content_A_layers, reuse=False, \
+		sty_A_con_B = self.decoder(style_A, content_B, style_A_layers, reuse=False, \
 						stylize=True, scope='decoder_A')
-		sty_B_con_A = self.decoder(content_B, content_A, content_B_layers, reuse=False, \
+		sty_B_con_A = self.decoder(style_B, content_A, style_B_layers, reuse=False, \
 						stylize=True, scope='decoder_B')
 		# decoding 
 		sty_A_con_A = self.decoder(content_A, content_A, content_A_layers, reuse=True, scope='decoder_A')
@@ -275,11 +278,22 @@ class ZSIT(object):
 
 		cycle_content_A, cycle_content_A_layers = self.content_encoder(sty_B_con_A, reuse=True, scope='content_encoder')
 		cycle_content_B, cycle_content_B_layers = self.content_encoder(sty_A_con_B, reuse=True, scope='content_encoder')
+		cycle_style_A, cycle_style_A_layers = self.style_encoder(sty_A_con_B, reuse=True, scope='style_encoder')
+		cycle_style_B, cycle_style_B_layers = self.style_encoder(sty_B_con_A, reuse=True, scope='style_encoder')
+
 		
-		cycle_A = self.decoder(cycle_content_B, cycle_content_A, cycle_content_B_layers, reuse=True, \
+		cycle_A = self.decoder(cycle_style_B, cycle_content_A, cycle_style_B_layers, reuse=True, \
 						stylize=True, scope='decoder_A')
-		cycle_B = self.decoder(cycle_content_A, cycle_content_B, cycle_content_A_layers, reuse=True, \
+		cycle_B = self.decoder(cycle_style_A, cycle_content_B, cycle_style_A_layers, reuse=True, \
 						stylize=True, scope='decoder_B')
+
+		content_feature_loss_A = L2_loss(cycle_content_A, content_A) 
+		content_feature_loss_B = L2_loss(cycle_content_B, content_B) 
+		style_feature_loss_A = L2_loss(cycle_style_A, style_A)
+		style_feature_loss_B = L2_loss(cycle_style_B, style_B)
+		feature_loss = content_feature_loss_A + content_feature_loss_B +\
+						 style_feature_loss_A + style_feature_loss_B
+
 
 		cycle_loss_A = L2_loss(cycle_A, self.domain_A)
 		cycle_loss_B = L2_loss(cycle_B, self.domain_B)
@@ -293,25 +307,33 @@ class ZSIT(object):
 		# define loss
 		G_loss_A = generator_loss(fake_A_logit)
 		G_loss_B = generator_loss(fake_B_logit)
-		self.Generator_loss_2 = (G_loss_A + G_loss_B)*20 + self.Generator_loss_1*0.01 + \
-				(cycle_loss_A + cycle_loss_B)*100 + (perceptual_loss_fake_A_1 + perceptual_loss_fake_B_1)*0.05
+		self.Generator_loss_2 = (G_loss_A + G_loss_B)*15 + self.Generator_loss_1*0.01 + \
+				(cycle_loss_A + cycle_loss_B)*100 + (perceptual_loss_fake_A_1 + perceptual_loss_fake_B_1)*0.05 + \
+				feature_loss
 
 		all_tf_vars = tf.trainable_variables()
 		D_loss_A = discriminator_loss(real_A_logit, fake_A_logit)
 		D_loss_B = discriminator_loss(real_B_logit, fake_B_logit)
 		self.Discriminator_loss = D_loss_A + D_loss_B
 
+
+		# non_local_vars = [var for var in all_tf_vars if ]
+		content_vars_copy = [var for var in all_tf_vars if 'content_encoder' in var.name and not 'NonLocalBlock' in var.name]
+		style_vars = [var for var in all_tf_vars if 'style_encoder' in var.name]
+
+		self.update_weights = [tf.assign(new, old) for (new, old) in \
+				zip(style_vars, content_vars_copy)]
+
 		''' Training Operations '''
-		decoder_vars = decoder_A_vars + decoder_B_vars
+		step2_vars = style_vars + content_vars + decoder_A_vars + decoder_B_vars
 		D_vars = [var for var in all_tf_vars if 'discriminator' in var.name]
 		
 		self.G_optim_2 = tf.train.AdamOptimizer(self.lr, beta1=0.5, name='Adam_2',\
-			beta2=0.999).minimize(self.Generator_loss_2, var_list=decoder_vars)
+			beta2=0.999).minimize(self.Generator_loss_2, var_list=step2_vars)
 		self.D_optim = tf.train.AdamOptimizer(self.lr, beta1=0.5, \
 			beta2=0.999).minimize(self.Discriminator_loss, var_list=D_vars)
 
-		# self.update_weights = [tf.assign(new, old) for (new, old) in \
-		# 		zip(decoder_B_vars, decoder_A_vars)]
+
 		
 
 		''' Summary '''
@@ -340,12 +362,14 @@ class ZSIT(object):
 		self.test_B = tf.placeholder(tf.float32, [1, self.img_h, self.img_w, self.img_c], name='test_B')
 		test_content_A, test_content_A_layers = self.content_encoder(self.test_A, reuse=True, scope='content_encoder')
 		test_content_B, test_content_B_layers = self.content_encoder(self.test_B, reuse=True, scope='content_encoder')
+		test_style_A, test_style_A_layers = self.style_encoder(self.test_A, reuse=True, scope='style_encoder')
+		test_style_B, test_style_B_layers = self.style_encoder(self.test_B, reuse=True, scope='style_encoder')
 		
-		self.test_recon_A = self.decoder(test_content_A, test_content_A, test_content_A_layers, reuse=True, scope='decoder_A')
-		self.test_recon_B = self.decoder(test_content_B, test_content_B, test_content_B_layers, reuse=True, scope='decoder_B')
+		self.test_recon_A = self.decoder(test_style_A, test_content_A, test_style_A_layers, reuse=True, scope='decoder_A')
+		self.test_recon_B = self.decoder(test_style_B, test_content_B, test_style_B_layers, reuse=True, scope='decoder_B')
 		
-		self.test_sty_A_con_B = self.decoder(test_content_A, test_content_B, test_content_A_layers, stylize=True, reuse=True, scope='decoder_A')
-		self.test_sty_B_con_A = self.decoder(test_content_B, test_content_A, test_content_B_layers, stylize=True, reuse=True, scope='decoder_B')
+		self.test_sty_A_con_B = self.decoder(test_style_A, test_content_B, test_style_A_layers, stylize=True, reuse=True, scope='decoder_A')
+		self.test_sty_B_con_A = self.decoder(test_style_B, test_content_A, test_style_B_layers, stylize=True, reuse=True, scope='decoder_B')
 
 	##################################################################################
 	# Operations
@@ -410,8 +434,8 @@ class ZSIT(object):
 					print('Epoch: [%2d] [%6d/%6d] time: %4.4f g_loss: %.6f'\
 						%(epoch, idx, self.iteration, time.time()-start_time, g_loss))
 				else:
-					# if(epoch==20):
-					# 	self.sess.run(self.update_weights)
+					if(epoch==20):
+						self.sess.run(self.update_weights)
 					## step 2 training
 					# train image to image transfer
 					lr = 0.0002

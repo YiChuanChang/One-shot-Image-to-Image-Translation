@@ -16,6 +16,7 @@ class ImageData:
 
 	# read image file from file path
 	def image_processing(self, filename):
+		# print(str(filename))
 		x = tf.read_file(filename)
 		x_decode = tf.image.decode_jpeg(x, channels=self.channels)
 		img = tf.image.resize_images(x_decode, [self.img_h, self.img_w])
