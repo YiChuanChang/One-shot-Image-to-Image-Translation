@@ -5,7 +5,7 @@ We discuss how a deep learning model may tackle the one-shot learning scenario o
 Tensorflow 1.8.0,
 Conda 4.6.14
 
-![Alt Network Structure](./img/OHG_structure.pdf)
+![Alt Network Structure](./img/OHG_structure.png)
 
 ## Installation
 ### Clone One Shot Image-to-Image Translation
@@ -85,14 +85,6 @@ python main.py --phase test
 ```
 
 
-
-
-
-
-
-
-
-
-
-
-|||
+### To-do
+Rearrange the code
+Add example images
